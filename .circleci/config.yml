@@ -1,0 +1,48 @@
+version: 2.1
+
+orbs:
+  terraform: circleci/terraform@3.2
+
+executors:
+  default:
+    docker:
+      - image: hashicorp/terraform:1.6
+    resource_class: small
+
+jobs:
+  validate:
+    executor: default
+    steps:
+      - checkout
+      - run:
+          name: Terraform Format Check
+          command: terraform fmt -check -recursive
+      - run:
+          name: Terraform Init
+          command: terraform init -backend=false
+      - run:
+          name: Terraform Validate
+          command: terraform validate
+
+  test:
+    executor: default
+    steps:
+      - checkout
+      - run:
+          name: Terraform Init Test
+          command: |
+            cd .test
+            terraform init -backend=false
+      - run:
+          name: Terraform Validate Test
+          command: |
+            cd .test
+            terraform validate
+
+workflows:
+  validate-and-test:
+    jobs:
+      - validate
+      - test:
+          requires:
+            - validate
