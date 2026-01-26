@@ -154,6 +154,86 @@ variable "common_tags" {
   default     = {}
 }
 
+###############################################################################
+# PostgreSQL Database Variables
+###############################################################################
+
+variable "postgres_enabled" {
+  description = "Enable PostgreSQL database for Grafana"
+  type        = bool
+  default     = true
+}
+
+variable "postgres_release_name" {
+  description = "Helm release name for PostgreSQL"
+  type        = string
+  default     = "grafana-postgres"
+}
+
+variable "postgres_chart_version" {
+  description = "Version of the PostgreSQL Helm chart to deploy"
+  type        = string
+  default     = "15.5.0"
+}
+
+variable "postgres_database" {
+  description = "PostgreSQL database name for Grafana"
+  type        = string
+  default     = "grafana"
+}
+
+variable "postgres_username" {
+  description = "PostgreSQL username for Grafana"
+  type        = string
+  default     = "grafana"
+}
+
+variable "postgres_password" {
+  description = "PostgreSQL password for Grafana. If not set, a random password will be generated"
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "postgres_persistence_enabled" {
+  description = "Enable persistent storage for PostgreSQL"
+  type        = bool
+  default     = true
+}
+
+variable "postgres_persistence_size" {
+  description = "Size of the persistent volume for PostgreSQL"
+  type        = string
+  default     = "10Gi"
+}
+
+variable "postgres_persistence_storage_class" {
+  description = "Storage class for PostgreSQL persistent volume"
+  type        = string
+  default     = null
+}
+
+variable "postgres_resources" {
+  description = "Resource requests and limits for PostgreSQL pods"
+  type = object({
+    requests = optional(object({
+      cpu    = optional(string, "100m")
+      memory = optional(string, "256Mi")
+    }), {})
+    limits = optional(object({
+      cpu    = optional(string, "500m")
+      memory = optional(string, "512Mi")
+    }), {})
+  })
+  default = {}
+}
+
+variable "postgres_extra_values" {
+  description = "Extra values to pass to the PostgreSQL Helm chart"
+  type        = any
+  default     = {}
+}
+
 variable "timeout" {
   description = "Timeout for Helm operations in seconds"
   type        = number

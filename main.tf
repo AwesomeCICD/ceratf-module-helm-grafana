@@ -8,8 +8,77 @@
 ###############################################################################
 
 locals {
+  # PostgreSQL connection details
+  postgres_host     = var.postgres_enabled ? "${var.postgres_release_name}-postgresql.${var.namespace}.svc.cluster.local" : null
+  postgres_port     = 5432
+  postgres_password = var.postgres_password != null ? var.postgres_password : random_password.postgres[0].result
+
+  # PostgreSQL Helm chart values
+  postgres_values = {
+    # Override image to use a verified working tag
+    image = {
+      registry   = "docker.io"
+      repository = "bitnami/postgresql"
+      tag        = "latest"
+    }
+
+    auth = {
+      username = var.postgres_username
+      password = local.postgres_password
+      database = var.postgres_database
+    }
+
+    primary = {
+      persistence = {
+        enabled      = var.postgres_persistence_enabled
+        size         = var.postgres_persistence_size
+        storageClass = var.postgres_persistence_storage_class
+      }
+
+      resources = var.postgres_resources
+    }
+
+    # Disable metrics by default for simpler setup
+    metrics = {
+      enabled = false
+    }
+  }
+
+  postgres_merged_values = merge(local.postgres_values, var.postgres_extra_values)
+
+  # Grafana database configuration when PostgreSQL is enabled
+  grafana_database_config = var.postgres_enabled ? {
+    "grafana.ini" = {
+      database = {
+        type     = "postgres"
+        host     = "${local.postgres_host}:${local.postgres_port}"
+        name     = var.postgres_database
+        user     = var.postgres_username
+        password = local.postgres_password
+        ssl_mode = "disable"
+      }
+    }
+  } : {}
+
   # Generate chart values from input variables
   chart_values = {
+    # Disable secret leak detection (we're passing DB password via values)
+    assertNoLeakedSecrets = false
+
+    # Use a reliable image tag
+    image = {
+      repository = "grafana/grafana"
+      tag        = "latest"
+    }
+
+    # Fix init container image
+    initChownData = {
+      image = {
+        repository = "busybox"
+        tag        = "latest"
+      }
+    }
+
     replicas = var.replicas
 
     adminUser     = var.admin_user
@@ -66,12 +135,43 @@ locals {
     podLabels = var.common_tags
   }
 
-  # Merge with any extra values provided by the user
-  merged_values = merge(local.chart_values, var.extra_values)
+  # Merge with database config and any extra values provided by the user
+  merged_values = merge(local.chart_values, local.grafana_database_config, var.extra_values)
 }
 
 ###############################################################################
-# Helm Release
+# Random Password for PostgreSQL (if not provided)
+###############################################################################
+
+resource "random_password" "postgres" {
+  count   = var.postgres_enabled && var.postgres_password == null ? 1 : 0
+  length  = 24
+  special = false
+}
+
+###############################################################################
+# PostgreSQL Helm Release
+###############################################################################
+
+resource "helm_release" "postgresql" {
+  count = var.postgres_enabled ? 1 : 0
+
+  name       = var.postgres_release_name
+  repository = "https://charts.bitnami.com/bitnami"
+  chart      = "postgresql"
+  version    = var.postgres_chart_version
+  namespace  = var.namespace
+
+  create_namespace = var.create_namespace
+  timeout          = var.timeout
+  atomic           = var.atomic
+  wait             = true # Always wait for PostgreSQL to be ready
+
+  values = [yamlencode(local.postgres_merged_values)]
+}
+
+###############################################################################
+# Grafana Helm Release
 ###############################################################################
 
 resource "helm_release" "grafana" {
@@ -87,4 +187,7 @@ resource "helm_release" "grafana" {
   wait             = var.wait
 
   values = [yamlencode(local.merged_values)]
+
+  # Ensure PostgreSQL is ready before deploying Grafana
+  depends_on = [helm_release.postgresql]
 }

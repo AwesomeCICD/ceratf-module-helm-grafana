@@ -36,3 +36,47 @@ output "grafana_ingress_hosts" {
   description = "List of ingress hosts if ingress is enabled"
   value       = var.ingress_enabled ? var.ingress_hosts : []
 }
+
+###############################################################################
+# PostgreSQL Outputs
+###############################################################################
+
+output "postgres_enabled" {
+  description = "Whether PostgreSQL is enabled"
+  value       = var.postgres_enabled
+}
+
+output "postgres_release_name" {
+  description = "The name of the PostgreSQL Helm release"
+  value       = var.postgres_enabled ? helm_release.postgresql[0].name : null
+}
+
+output "postgres_host" {
+  description = "PostgreSQL hostname for internal cluster access"
+  value       = var.postgres_enabled ? local.postgres_host : null
+}
+
+output "postgres_port" {
+  description = "PostgreSQL port"
+  value       = var.postgres_enabled ? local.postgres_port : null
+}
+
+output "postgres_database" {
+  description = "PostgreSQL database name"
+  value       = var.postgres_enabled ? var.postgres_database : null
+}
+
+output "postgres_username" {
+  description = "PostgreSQL username"
+  value       = var.postgres_enabled ? var.postgres_username : null
+}
+
+output "postgres_connection_string" {
+  description = "PostgreSQL connection string (without password)"
+  value       = var.postgres_enabled ? "postgresql://${var.postgres_username}@${local.postgres_host}:${local.postgres_port}/${var.postgres_database}" : null
+}
+
+output "postgres_internal_url" {
+  description = "Internal URL to access PostgreSQL within the cluster"
+  value       = var.postgres_enabled ? "postgresql://${local.postgres_host}:${local.postgres_port}" : null
+}
