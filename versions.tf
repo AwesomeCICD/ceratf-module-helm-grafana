@@ -1,9 +1,9 @@
-###############################################################################
-# Terraform and Provider Version Constraints
-###############################################################################
+################################################################################
+# Grafana Helm Module - Provider Requirements
+################################################################################
 
 terraform {
-  required_version = ">= 1.0.9"
+  required_version = ">= 1.0"
 
   required_providers {
     helm = {
@@ -19,4 +19,11 @@ terraform {
       version = ">= 3.0.0"
     }
   }
+}
+
+# Provider configuration - uses KUBECONFIG environment variable
+provider "kubernetes" {
+}
+
+provider "helm" {
 }

@@ -5,6 +5,7 @@
 variable "namespace" {
   description = "Kubernetes namespace where Grafana will be deployed"
   type        = string
+  default     = "grafana"
 }
 
 variable "release_name" {
