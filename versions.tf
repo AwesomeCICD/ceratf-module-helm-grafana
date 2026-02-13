@@ -20,10 +20,3 @@ terraform {
     }
   }
 }
-
-# Provider configuration - uses KUBECONFIG environment variable
-provider "kubernetes" {
-}
-
-provider "helm" {
-}
