@@ -1,0 +1,228 @@
+version: 2.1
+
+orbs:
+  aws-cli: circleci/aws-cli@3.1.3
+
+parameters:
+  aws-account-id:
+    type: string
+    default: "992382483259"
+  aws-pipeline-iam-prefix:
+    type: string
+    default: cera-fe-pipeline
+  circleci-org-id:
+    type: string
+    default: efc130dc-284f-4533-964e-844f5c173860
+  usage-lookback-days:
+    type: integer
+    default: 3
+  eks-cluster-name:
+    type: string
+    default: cera-usw2-namer
+  eks-region:
+    type: string
+    default: us-west-2
+  pg-service:
+    type: string
+    default: circleci-usage-pg-postgresql
+  pg-namespace:
+    type: string
+    default: monitoring
+  pg-database:
+    type: string
+    default: circleci_usage
+  pg-user:
+    type: string
+    default: circleci
+  audit-bucket:
+    type: string
+    default: cera-circleci-audit-logs
+  audit-bucket-region:
+    type: string
+    default: us-west-2
+
+executors:
+  python:
+    docker:
+      - image: cimg/python:3.12
+    resource_class: medium
+
+commands:
+  setup-cluster-access:
+    description: Authenticate to EKS via OIDC and install kubectl
+    steps:
+      - aws-cli/install
+      - aws-cli/assume-role-with-web-identity:
+          role-arn: "arn:aws:iam::<< pipeline.parameters.aws-account-id >>:role/<< pipeline.parameters.aws-pipeline-iam-prefix >>-role"
+          role-session-name: "cci-data-loader-<< pipeline.number >>"
+      - run:
+          name: Install kubectl
+          command: |
+            curl -sLO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+      - run:
+          name: Configure kubeconfig
+          command: |
+            aws eks update-kubeconfig \
+              --name << pipeline.parameters.eks-cluster-name >> \
+              --region << pipeline.parameters.eks-region >>
+
+  start-port-forward:
+    description: Open a tunnel to the in-cluster Postgres and export connection vars
+    steps:
+      - run:
+          name: Fetch Postgres password and start port-forward
+          command: |
+            PGPASSWORD=$(kubectl get secret \
+              << pipeline.parameters.pg-service >> \
+              -n << pipeline.parameters.pg-namespace >> \
+              -o jsonpath='{.data.password}' | base64 -d)
+
+            # Persist for subsequent steps (CircleCI masks values written via BASH_ENV)
+            echo "export PGPASSWORD='${PGPASSWORD}'" >> "$BASH_ENV"
+            echo "export PGHOST=127.0.0.1"            >> "$BASH_ENV"
+            echo "export PGPORT=5432"                  >> "$BASH_ENV"
+            echo "export PGDATABASE=<< pipeline.parameters.pg-database >>" >> "$BASH_ENV"
+            echo "export PGUSER=<< pipeline.parameters.pg-user >>"        >> "$BASH_ENV"
+          no_output_timeout: 30s
+      - run:
+          name: Start kubectl port-forward
+          command: |
+            kubectl port-forward \
+              svc/<< pipeline.parameters.pg-service >> 5432:5432 \
+              -n << pipeline.parameters.pg-namespace >>
+          background: true
+      - run:
+          name: Wait for port-forward
+          command: |
+            for i in $(seq 1 15); do
+              nc -z 127.0.0.1 5432 && exit 0
+              sleep 1
+            done
+            echo "Port-forward failed to start" && exit 1
+
+  install-python-deps:
+    steps:
+      - run:
+          name: Install Python dependencies
+          command: pip install --quiet pandas psycopg2-binary boto3 requests
+
+jobs:
+  load-usage-data:
+    executor: python
+    steps:
+      - checkout
+      - install-python-deps
+      - setup-cluster-access
+      - start-port-forward
+      - run:
+          name: Download Usage API data
+          command: |
+            python3 scripts/download-usage.py \
+              --lookback-days << pipeline.parameters.usage-lookback-days >> \
+              --output-dir ./data
+          environment:
+            CIRCLECI_ORG_ID: << pipeline.parameters.circleci-org-id >>
+          no_output_timeout: 10m
+      - run:
+          name: Load into Postgres
+          command: |
+            python3 scripts/pg-loader.py \
+              --directory ./data \
+              --create-schema \
+              --summary
+          no_output_timeout: 5m
+      - store_artifacts:
+          path: ./data
+          destination: usage-csv
+
+  load-audit-logs:
+    executor: python
+    steps:
+      - checkout
+      - install-python-deps
+      - setup-cluster-access
+      - start-port-forward
+      - run:
+          name: Load audit logs from S3
+          command: |
+            python3 scripts/audit-log-loader.py s3 \
+              --bucket << pipeline.parameters.audit-bucket >> \
+              --region << pipeline.parameters.audit-bucket-region >> \
+              --create-schema \
+              --summary
+          no_output_timeout: 10m
+
+  backfill-usage-data:
+    executor: python
+    parameters:
+      start-date:
+        type: string
+      end-date:
+        type: string
+    steps:
+      - checkout
+      - install-python-deps
+      - setup-cluster-access
+      - start-port-forward
+      - run:
+          name: Download Usage API data (<< parameters.start-date >> to << parameters.end-date >>)
+          command: |
+            python3 -c "
+            import sys
+            sys.path.insert(0, 'scripts')
+            from importlib import import_module
+            dl = import_module('download-usage')
+            import os, argparse
+            os.makedirs('./data', exist_ok=True)
+            job_id = dl.start_export(
+                os.environ['CIRCLECI_TOKEN'],
+                os.environ['CIRCLECI_ORG_ID'],
+                '<< parameters.start-date >>',
+                '<< parameters.end-date >>')
+            result = dl.poll_until_ready(
+                os.environ['CIRCLECI_TOKEN'],
+                os.environ['CIRCLECI_ORG_ID'],
+                job_id, timeout=600)
+            urls = result.get('download_urls', [])
+            if urls:
+                dl.download_csv(urls, './data', 'usage-<< parameters.start-date >>-to-<< parameters.end-date >>')
+            "
+          environment:
+            CIRCLECI_ORG_ID: << pipeline.parameters.circleci-org-id >>
+          no_output_timeout: 10m
+      - run:
+          name: Load into Postgres
+          command: |
+            python3 scripts/pg-loader.py \
+              --directory ./data \
+              --create-schema \
+              --summary
+          no_output_timeout: 5m
+
+workflows:
+  daily-data-load:
+    jobs:
+      - load-usage-data:
+          context:
+            - empty-context
+            - circleci-usage-api
+      - load-audit-logs:
+          context:
+            - empty-context
+          requires:
+            - load-usage-data
+
+  # One-time backfill: uncomment and set dates, then trigger manually.
+  # After backfill completes, comment out again.
+  #
+  # backfill:
+  #   jobs:
+  #     - backfill-usage-data:
+  #         context:
+  #           - empty-context
+  #           - circleci-usage-api
+  #         matrix:
+  #           parameters:
+  #             start-date: ["2025-04-01","2025-05-01","2025-06-01","2025-07-01","2025-08-01","2025-09-01","2025-10-01","2025-11-01","2025-12-01","2026-01-01","2026-02-01"]
+  #             end-date:   ["2025-04-30","2025-05-31","2025-06-30","2025-07-31","2025-08-31","2025-09-30","2025-10-31","2025-11-30","2025-12-31","2026-01-31","2026-03-03"]
