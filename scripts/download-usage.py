@@ -9,6 +9,7 @@ Requires:
 Writes CSV file(s) to --output-dir.
 """
 
+import gzip
 import os
 import sys
 import time
@@ -64,9 +65,13 @@ def download_csv(urls: list, output_dir: str, prefix: str) -> list:
         r.raise_for_status()
         fname = f"{prefix}-{i}.csv" if len(urls) > 1 else f"{prefix}.csv"
         path = os.path.join(output_dir, fname)
+        content = r.content
+        if content[:2] == b'\x1f\x8b':
+            content = gzip.decompress(content)
+            logger.info(f"Decompressed gzip response ({len(r.content):,} -> {len(content):,} bytes)")
         with open(path, "wb") as f:
-            f.write(r.content)
-        logger.info(f"Downloaded {path} ({len(r.content):,} bytes)")
+            f.write(content)
+        logger.info(f"Downloaded {path} ({len(content):,} bytes)")
         paths.append(path)
     return paths
 
