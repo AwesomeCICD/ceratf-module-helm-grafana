@@ -14,7 +14,7 @@ import sys
 import time
 import argparse
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -89,8 +89,8 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    end_date = datetime.utcnow().strftime("%Y-%m-%d")
-    start_date = (datetime.utcnow() - timedelta(days=args.lookback_days)).strftime("%Y-%m-%d")
+    end_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    start_date = (datetime.now(timezone.utc) - timedelta(days=args.lookback_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     job_id = start_export(token, org_id, start_date, end_date)
     result = poll_until_ready(token, org_id, job_id, args.timeout)
